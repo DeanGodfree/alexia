@@ -77,6 +77,7 @@ getCode.with{
             |'''.stripMargin())
   }
   publishers{
+    archiveArtifacts("**/*")
     downstreamParameterized{
       trigger(projectFolderName + "/Install"){
         condition("UNSTABLE_OR_BETTER")
@@ -261,8 +262,8 @@ codeAnalysisJob.with {
             trigger(projectFolderName + "/Package") {
                 condition("UNSTABLE_OR_BETTER")
                 parameters {
-                    predefinedProp("B", '${B}')
-                    predefinedProp("PARENT_BUILD", '${PARENT_BUILD}')
+                  predefinedProp("B",'${BUILD_NUMBER}')
+                  predefinedProp("PARENT_BUILD", '${JOB_NAME}')
                 }
             }
         }
