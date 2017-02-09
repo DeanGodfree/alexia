@@ -6,9 +6,11 @@ def sonarProjectKey = projectFolderName.toLowerCase().replace("/", "-");
 // Variables
 def referenceAppGitRepo = "alexia"
 def referenceAppGitUrl = "ssh://jenkins@gerrit:29418/${PROJECT_NAME}/" + referenceAppGitRepo
+def lambdaCFRepoName= "Lambda_CF"
+def lambdaCFRepoUrl = "ssh://jenkins@gerrit:29418/${PROJECT_NAME}/" + lambdaCFRepoName
 
 // Jobs
-def getCode = freeStyleJob(projectFolderName + "/Get_Code")
+def createLambdaFunctionStack = freeStyleJob(projectFolderName + "/Create_Lambda_Function_Stack")
 def install = freeStyleJob(projectFolderName + "/Install")
 def test = freeStyleJob(projectFolderName + "/Test")
 def lint = freeStyleJob(projectFolderName + "/Lint")
@@ -21,75 +23,90 @@ def pipelineView = buildPipelineView(projectFolderName + "/Example_Alexia_Pipeli
 pipelineView.with{
     title('Example Alexia Pipeline')
     displayedBuilds(5)
-    selectedJob(projectFolderName + "/Get_Code")
+    selectedJob(projectFolderName + "/Create_Lambda_Function_Stack")
     showPipelineParameters()
     showPipelineDefinitionHeader()
     refreshFrequency(5)
 }
 
-getCode.with{
-  description("This job downloads the code from Git.")
-  wrappers {
-    preBuildCleanup()
-    injectPasswords()
-    maskPasswords()
-    sshAgent("adop-jenkins-master")
-  }
-  scm{
-    git{
-      remote{
-        url(referenceAppGitUrl)
-        credentials("adop-jenkins-master")
-      }
-      branch("*/master")
+createLambdaFunctionStack.with{
+    description("")
+	logRotator {
+		numToKeep(25)
     }
-  }
-  environmentVariables {
+	parameters{
+		stringParam("LAMBDA_FUNCTION_CODE_REPO_URL","","Specify Repo URL to use for cloning the code for the Lambda function.")
+		stringParam("LAMBDA_FUNCTION_NAME","ExampleFunction","Specify a name for the lambda function.")
+		stringParam("LAMBDA_HANDLER","index.handler","The Handler for the Lambda Function")
+		stringParam("LAMBDA_FUNCTION_DESCRIPTION","A Simple Lambda Function","Description of the Lambda Function")
+		stringParam("LAMBDA_EXECUTION_ROLE","","The AWS Identity and Access Management (IAM) execution role that Lambda assumes when it runs your code to access AWS services.")
+		stringParam("LAMBDA_RUNTIME","nodejs4.3","The runtime environment for the Lambda function you are uploading.")
+		choiceParam("AWS_REGION", ['eu-west-1', 'us-west-1', 'us-east-1', 'us-west-2', 'eu-central-1', 'ap-northeast-1', 'ap-southeast-1', 'ap-southeast-2', 'sa-east-1'], "The AWS Region to deploy the Stacks.")
+		credentialsParam("AWS_CREDENTIALS"){
+			type('com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl')
+			required()
+			defaultValue('aws-credentials')
+			description('AWS access key and secret key for your account')
+		}
+	}
+	label("aws")
+	environmentVariables {
       env('WORKSPACE_NAME',workspaceFolderName)
       env('PROJECT_NAME',projectFolderName)
-  }
-  triggers{
-    gerrit{
-      events{
-        refUpdated()
-      }
-      configure { gerritxml ->
-        gerritxml / 'gerritProjects' {
-          'com.sonyericsson.hudson.plugins.gerrit.trigger.hudsontrigger.data.GerritProject' {
-            compareType("PLAIN")
-            pattern(projectFolderName + "/" + referenceAppgitRepo)
-            'branches' {
-              'com.sonyericsson.hudson.plugins.gerrit.trigger.hudsontrigger.data.Branch' {
-                compareType("PLAIN")
-                pattern("master")
-              }
-            }
-          }
-        }
-        gerritxml / serverName("ADOP Gerrit")
-      }
     }
-  }
-  label("docker")
-  steps {
-    shell('''set -xe
-            |echo Pull the code from Git 
-            |'''.stripMargin())
-  }
-  publishers{
-    archiveArtifacts("**/*")
-    downstreamParameterized{
-      trigger(projectFolderName + "/Install"){
-        condition("UNSTABLE_OR_BETTER")
-        parameters{
-          predefinedProp("B",'${BUILD_NUMBER}')
-          predefinedProp("PARENT_BUILD",'${JOB_NAME}')
+	scm{
+		git{
+			remote{
+				name("origin")
+				url("${lambdaCFRepoUrl}")
+				credentials("adop-jenkins-master")
+			}
+			branch("*/remote")
+		}
+	}
+	wrappers {
+		preBuildCleanup()
+		injectPasswords {
+            injectGlobalPasswords()
         }
-      }
-    }
-  }
+		maskPasswords()
+		sshAgent("adop-jenkins-master")
+		credentialsBinding {
+		  usernamePassword("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", '${AWS_CREDENTIALS}')
+		}
+	}
+	steps {
+		shell('''#!/bin/bash -ex
+		
+		lambda_function_stack_name="${LAMBDA_FUNCTION_NAME}_Stack"
+		
+		aws cloudformation create-stack --stack-name ${lambda_function_stack_name} --region ${AWS_REGION} --capabilities "CAPABILITY_IAM" \\
+			--tags "Key=CreatedBy,Value=Jenkins" }" \\
+			--template-body file://$WORKSPACE/Lambda_Function_CF.json \\
+			--parameters \\
+			ParameterKey=Lambda_Function_Name,ParameterValue=${LAMBDA_FUNCTION_NAME} \\
+			ParameterKey=Lambda_Handler,ParameterValue=${LAMBDA_HANDLER} \\
+			ParameterKey=Lambda_Function_Description,ParameterValue=${LAMBDA_FUNCTION_DESCRIPTION} \\
+			ParameterKey=Lambda_Execution_Role,ParameterValue=${LAMBDA_EXECUTION_ROLE} \\
+			ParameterKey=Lambda_Runtime,ParameterValue=${LAMBDA_RUNTIME} \\
+		''')
+	}
+	publishers{
+		archiveArtifacts("**/*")
+		downstreamParameterized{
+		  trigger(projectFolderName + "/Install"){
+			condition("UNSTABLE_OR_BETTER")
+			parameters{
+			  predefinedProp("B",'${BUILD_NUMBER}')
+			  predefinedProp("PARENT_BUILD",'${JOB_NAME}')
+			}
+		  }
+		}
+	}
 }
 
+ 
+ 
 install.with{
   description("This job performs an npm install")
   parameters{
