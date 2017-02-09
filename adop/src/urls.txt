@@ -1,1 +1,1 @@
-https://github.com/Accenture/alexia.git
+ssh://git@innersource.accenture.com/atl/alexia-openslava-app.git
