@@ -11,6 +11,8 @@ def getCode = freeStyleJob(projectFolderName + "/Get_Code")
 def install = freeStyleJob(projectFolderName + "/Install")
 def test = freeStyleJob(projectFolderName + "/Test")
 def lint = freeStyleJob(projectFolderName + "/Lint")
+def codeAnalysisJob = freeStyleJob(projectFolderName + "/Code_Analysis")
+def packageJob = freeStyleJob(projectFolderName + "/Package")
 
 // Views
 def pipelineView = buildPipelineView(projectFolderName + "/Example_Alexia_Pipeline")
@@ -202,6 +204,99 @@ lint.with{
             |		npm run lint
             |'''.stripMargin())
   }
+  publishers{
+    downstreamParameterized{
+      trigger(projectFolderName + "/Code_Analysis"){
+        condition("UNSTABLE_OR_BETTER")
+        parameters{
+          predefinedProp("B",'${BUILD_NUMBER}')
+          predefinedProp("PARENT_BUILD", '${JOB_NAME}')
+        }
+      }
+    }
+  }
 }
 
+codeAnalysisJob.with {
+    description("Code quality analysis for nodejs reference application using SonarQube.")
+    parameters {
+        stringParam("B", '', "Parent build number")
+        stringParam("PARENT_BUILD", '', "Parent build name")
+    }
+    environmentVariables {
+        env('WORKSPACE_NAME', workspaceFolderName)
+        env('PROJECT_NAME', projectFolderName)
+        env('SONAR_PROJECT_KEY', sonarProjectKey)
+    }
+    wrappers {
+        preBuildCleanup()
+        injectPasswords()
+        maskPasswords()
+        sshAgent("adop-jenkins-master")
+    }
+    steps {
+        copyArtifacts(projectFolderName + "/Get_Code") {
+            buildSelector {
+                buildNumber('${B}')
+            }
+        }
+    }
+    configure { myProject ->
+        myProject / builders << 'hudson.plugins.sonar.SonarRunnerBuilder'(plugin: "sonar@2.2.1") {
+            properties('''|sonar.projectKey=${SONAR_PROJECT_KEY}
+            |sonar.projectName=${PROJECT_NAME}
+            |sonar.projectVersion=0.0.${B}
+            |sonar.language=js
+            |sonar.sources=app/scripts
+            |sonar.scm.enabled=false
+            '''.stripMargin())
+            javaOpts()
+            jdk('(Inherit From Job)')
+            task()
+        }
+    }
+    publishers {
+        downstreamParameterized {
+            trigger(projectFolderName + "/Package") {
+                condition("UNSTABLE_OR_BETTER")
+                parameters {
+                    predefinedProp("B", '${B}')
+                    predefinedProp("PARENT_BUILD", '${PARENT_BUILD}')
+                }
+            }
+        }
+    }
+}
 
+packageJob.with {
+    description("Create package(zip) to update AWS Lambda function.")
+    parameters {
+        stringParam("B", '', "Parent build number")
+        stringParam("PARENT_BUILD", '', "Parent build name")
+    }
+    environmentVariables {
+        env('WORKSPACE_NAME', workspaceFolderName)
+        env('PROJECT_NAME', projectFolderName)
+    }
+    wrappers {
+        preBuildCleanup()
+        injectPasswords()
+        maskPasswords()
+        sshAgent("adop-jenkins-master")
+    }
+    steps {
+      shell('''set -x
+            |echo Package Code
+            |
+            |rm -rf target
+            |mkdir -p target
+            | 
+            |cp -r *.js package.json lib target/
+            | 
+            |pushd target
+            |npm install --production
+            |zip -r package-lambda.zip .
+            |popd
+            |'''.stripMargin())
+    }
+}
