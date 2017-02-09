@@ -1,1 +1,2 @@
 ssh://git@innersource.accenture.com/atl/alexia-openslava-app.git
+ssh://git@innersource.accenture.com/atl/lambda_cf.git
